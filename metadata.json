@@ -1,0 +1,7 @@
+{
+  "name": "FolioCraft AI - Next-Gen AI Portfolio Builder & Career Hub",
+  "description": "Create stunning, recruiter-ready developer and job-seeker portfolios with AI assistance, real-time preview, multiple templates, resume import, GitHub sync, and role-based portfolio analysis.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

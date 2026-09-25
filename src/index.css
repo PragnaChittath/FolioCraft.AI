@@ -1,0 +1,190 @@
+@import "tailwindcss";
+
+@layer base {
+  * {
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+  
+  html {
+    scroll-behavior: smooth;
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+}
+
+/* Custom subtle scrollbars */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.2);
+  border-radius: 9999px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.4);
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Print & PDF Export Optimized Stylesheet */
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 12mm 12mm 12mm 12mm;
+  }
+
+  /* Reset layout, background and typography for clean paper export */
+  html, body {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    font-size: 11pt !important;
+    line-height: 1.5 !important;
+    width: 100% !important;
+    height: auto !important;
+    overflow: visible !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Hide all non-essential application UI, controls, modals, and toolbars */
+  header,
+  nav,
+  aside,
+  button,
+  input,
+  select,
+  textarea,
+  iframe,
+  form,
+  [role="dialog"],
+  .fixed,
+  .sticky,
+  .no-print,
+  .modal-backdrop,
+  [class*="backdrop-blur"],
+  [class*="blur-3xl"] {
+    display: none !important;
+  }
+
+  /* Unconstrain main container and remove viewport scroll locks */
+  main,
+  #root,
+  .min-h-screen,
+  .min-h-full {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    background: transparent !important;
+  }
+
+  /* Override dark backgrounds inside portfolio components to crisp white/light cards */
+  [class*="bg-slate-950"],
+  [class*="bg-slate-900"],
+  [class*="bg-slate-800"],
+  [class*="bg-zinc-950"],
+  [class*="bg-zinc-900"],
+  [class*="bg-[#0b1329]"],
+  [class*="bg-[#0f0b1e]"],
+  [class*="bg-[#180d12]"],
+  [class*="bg-[#17130b]"],
+  [class*="bg-[#0a1128]"] {
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+  }
+
+  /* Adjust muted text for sharp contrast in print */
+  .text-slate-400,
+  .text-slate-500,
+  .text-zinc-400,
+  .text-muted,
+  [class*="textMuted"] {
+    color: #475569 !important;
+  }
+
+  .text-white,
+  .text-slate-100,
+  .text-slate-200 {
+    color: #0f172a !important;
+  }
+
+  /* Clean print borders */
+  * {
+    box-shadow: none !important;
+    text-shadow: none !important;
+    border-color: #e2e8f0 !important;
+  }
+
+  /* Section Spacing & Page Break Controls */
+  section {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+    margin-bottom: 22pt !important;
+    padding: 14pt !important;
+    border: 1pt solid #e2e8f0 !important;
+    border-radius: 8pt !important;
+    background: #ffffff !important;
+  }
+
+  /* Avoid breaking headings from content */
+  h1, h2, h3, h4, h5, h6 {
+    break-after: avoid !important;
+    page-break-after: avoid !important;
+    color: #0f172a !important;
+  }
+
+  /* Avoid breaking inside individual project, experience, or skill cards */
+  section > div,
+  .grid > div,
+  li,
+  tr {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  /* Clean links in print */
+  a {
+    color: #3b82f6 !important;
+    text-decoration: none !important;
+  }
+
+  /* Make sure images render crisply */
+  img {
+    max-width: 100% !important;
+    page-break-inside: avoid !important;
+    filter: none !important;
+  }
+
+  /* Badge and tech tag styling in print */
+  span[class*="rounded"] {
+    background-color: #f1f5f9 !important;
+    color: #334155 !important;
+    border: 0.5pt solid #cbd5e1 !important;
+  }
+
+  /* Footer print styling */
+  footer {
+    display: block !important;
+    margin-top: 24pt !important;
+    padding-top: 12pt !important;
+    border-top: 1pt solid #cbd5e1 !important;
+    color: #64748b !important;
+    font-size: 9pt !important;
+  }
+}
