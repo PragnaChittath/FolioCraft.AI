@@ -28,6 +28,41 @@ const PROMPT_SUGGESTIONS = [
   'Suggest a catchy headline for my portfolio.',
 ];
 
+function getLocalChatAdvice(query: string, portfolio: PortfolioData): string {
+  const q = (query || '').toLowerCase();
+  const role = portfolio.targetRole || 'Software Developer';
+
+  if (q.includes('project') || q.includes('star') || q.includes('description')) {
+    return `To craft an impressive project description using the **STAR Method**:
+1. **Situation & Task:** State the core problem or purpose in 1-2 sentences.
+2. **Action:** List specific engineering decisions (e.g., *Built REST APIs in Node.js/TypeScript and optimized PostgreSQL indexing*).
+3. **Result:** Quantify impact (e.g., *Reduced latency by 40%, supported 10k+ active users*).
+4. Always include both a **GitHub repository** link and a **Live Demo** URL!`;
+  }
+
+  if (q.includes('headline') || q.includes('tagline') || q.includes('title')) {
+    return `Here are top recruiter-tested headlines for **${role}**:
+• *Senior ${role} | Scalable Cloud Systems & Modern Web Applications*
+• *Full-Lifecycle ${role} | Building High-Velocity, Resilient Digital Solutions*
+• *Passionate ${role} specializing in Distributed Architecture & Clean Code*`;
+  }
+
+  if (q.includes('skill') || q.includes('tech stack') || q.includes('missing')) {
+    return `For **${role}** candidates, recruiters search for these top keywords:
+• **Languages:** TypeScript, JavaScript, Python, Go, SQL
+• **Frontend:** React 19, Next.js, Tailwind CSS, Responsive Design
+• **Backend & Cloud:** Node.js, Express, Docker, AWS / GCP, CI/CD Pipelines
+• **Databases:** PostgreSQL, MongoDB, Redis caching`;
+  }
+
+  return `Here are actionable strategies to make your **${role}** portfolio stand out:
+
+• **Use the STAR Formula:** Format project achievements as *Situation, Task, Action, and Result* with quantifiable numbers.
+• **Live URLs & Repos:** Recruiters prioritize projects with working live demos and public GitHub repositories with clean README files.
+• **Categorized Skills:** Organize your stack into Frontend, Backend, Databases, and Cloud/DevOps with proficiency indicators.
+• **Clear Tagline:** State who you are, what you build, and your availability status right in the hero section!`;
+}
+
 export const AIPortfolioAssistantDrawer: React.FC<AIPortfolioAssistantDrawerProps> = ({
   isOpen,
   onClose,
@@ -93,24 +128,25 @@ Ask me anything:
       });
 
       const data = await res.json();
-      if (!data.success) throw new Error(data.error || 'Failed to get response');
+      const replyContent = data.success && data.message ? data.message : getLocalChatAdvice(textToSend, portfolio);
 
       const botMsg: ChatMessage = {
         id: `bot-${Date.now()}`,
         role: 'assistant',
-        content: data.message,
+        content: replyContent,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
 
       setMessages((prev) => [...prev, botMsg]);
     } catch (err: any) {
-      console.error(err);
+      console.warn('Using client-side career chat advice fallback:', err);
+      const fallbackReply = getLocalChatAdvice(textToSend, portfolio);
       setMessages((prev) => [
         ...prev,
         {
-          id: `bot-err-${Date.now()}`,
+          id: `bot-fb-${Date.now()}`,
           role: 'assistant',
-          content: 'Sorry, I ran into an issue answering your question. Please try again!',
+          content: fallbackReply,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         },
       ]);

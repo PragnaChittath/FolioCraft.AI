@@ -11,36 +11,65 @@ const PORT = Number(process.env.PORT) || 3000;
 
 app.use(express.json({ limit: '15mb' }));
 
-// Server-side Gemini initialization with telemetry header
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
-    },
-  },
-});
+// Initialize Gemini SDK with server-side environment key
+const geminiApiKey = process.env.GEMINI_API_KEY || '';
+const hasGeminiKey = Boolean(geminiApiKey && geminiApiKey.trim().length > 5);
 
-// Helper for calling Gemini with retry and exponential backoff on 503 / 429 / UNAVAILABLE
-async function callGeminiWithRetry<T>(fn: () => Promise<T>, maxRetries = 2): Promise<T> {
+const ai = hasGeminiKey
+  ? new GoogleGenAI({
+      apiKey: geminiApiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    })
+  : null;
+
+// Helper to determine if error is non-retryable (like quota exhaustion or missing key)
+function isQuotaExhaustedError(err: any): boolean {
+  if (!err) return false;
+  const msg = (err.message || '').toLowerCase();
+  const status = err.status || err.statusCode || 0;
+  return (
+    status === 429 ||
+    status === 403 ||
+    msg.includes('resource has been exhausted') ||
+    msg.includes('quota') ||
+    msg.includes('rate limit') ||
+    msg.includes('exhausted') ||
+    msg.includes('api_key_invalid') ||
+    msg.includes('unregistered callers') ||
+    msg.includes('permission_denied')
+  );
+}
+
+// Helper for calling Gemini with retry and exponential backoff only for true transient network hiccups
+async function callGeminiSafely<T>(fn: () => Promise<T>, maxRetries = 1): Promise<T> {
+  if (!ai || !hasGeminiKey) {
+    throw new Error('GEMINI_API_OFFLINE: No Gemini API key provided');
+  }
+
   let attempt = 0;
   while (true) {
     try {
       return await fn();
     } catch (err: any) {
+      if (isQuotaExhaustedError(err)) {
+        // Quota exhausted or permission error: immediately throw so fallback runs without wasting user time
+        throw err;
+      }
+
       attempt++;
       const isTransient =
         err?.status === 503 ||
-        err?.status === 429 ||
         err?.message?.includes('503') ||
         err?.message?.includes('UNAVAILABLE') ||
         err?.message?.includes('high demand') ||
-        err?.message?.includes('Resource has been exhausted') ||
         err?.message?.includes('Overloaded');
 
       if (isTransient && attempt <= maxRetries) {
-        const delay = attempt * 1200 + Math.random() * 400;
-        console.warn(`[Gemini API] Transient error (attempt ${attempt}/${maxRetries}), retrying in ${Math.round(delay)}ms...`);
+        const delay = 800;
         await new Promise((resolve) => setTimeout(resolve, delay));
         continue;
       }
@@ -49,97 +78,167 @@ async function callGeminiWithRetry<T>(fn: () => Promise<T>, maxRetries = 2): Pro
   }
 }
 
-// Fallback Generators for High-Traffic / Offline resilience
+// Smart Career Engine Fallback Generators
 function generateContentFallback(type: string, prompt: string, context: any, targetRole: string): string {
   const role = targetRole || 'Software Engineer';
+  const rawText = (prompt || '').trim();
+
   switch (type) {
     case 'about-me':
+      if (rawText.length > 20) {
+        return `I am a dedicated ${role} specializing in building robust, performant, and user-centric digital experiences. ${rawText}\n\nDriven by continuous learning and architectural clarity, I enjoy collaborating with cross-functional engineering teams to transform complex requirements into scalable, clean solutions.`;
+      }
       return `I am an ambitious and detail-oriented ${role} with a deep passion for building high-performance, accessible, and scalable digital solutions. With a proven foundation in modern software development and engineering best practices, I excel at transforming complex business requirements into elegant, user-centric architectures. I thrive in collaborative, fast-paced environments where code quality, creative problem-solving, and continuous learning are celebrated.`;
+
     case 'headline':
       return JSON.stringify([
-        `${role} | Crafting Resilient Cloud Systems & High-Velocity Web Apps`,
+        `${role} | Crafting High-Velocity Web Apps & Scalable Systems`,
         `Modern ${role} specializing in Scalable Architecture & Clean Code`,
         `Passionate ${role} | Building Scalable, Modern & High-Performance Solutions`,
         `Full-Lifecycle ${role} | Dedicated to Engineering Excellence & UX`,
-        `Driven ${role} with a Track Record of Delivering High-Impact Products`
+        `Driven ${role} with a Track Record of Delivering High-Impact Products`,
       ]);
+
     case 'project-description':
+      if (rawText.length > 15) {
+        return `Architected and deployed ${rawText}.\n\n• Designed modular components with clean separation of concerns and robust data validation.\n• Optimized frontend state management and API latency, ensuring sub-second response times under load.\n• Implemented secure authentication, automated testing pipelines, and responsive cross-device UI.\n• Deployed on cloud infrastructure with automated CI/CD workflows and monitoring telemetry.`;
+      }
       return `Architected and developed a full-stack solution utilizing modern engineering standards to address real-world workflows.\n\n• Designed modular system architecture with clean separation of concerns and robust data validation.\n• Optimized frontend state management and API latency, ensuring sub-second response times under load.\n• Implemented secure authentication, automated testing pipelines, and responsive cross-device UI.\n• Deployed on cloud infrastructure with automated CI/CD workflows and monitoring telemetry.`;
+
     case 'career-objective':
       return `Dedicated and forward-thinking ${role} aiming to leverage robust system architecture, clean design patterns, and collaborative engineering skills to deliver scalable, business-critical solutions in an innovative tech environment.`;
+
     case 'skill-recommendations':
       return JSON.stringify({
-        frontend: ['React 19', 'Next.js', 'TypeScript', 'Tailwind CSS', 'Redux Toolkit', 'Vite'],
-        backend: ['Node.js', 'Express', 'Python', 'FastAPI', 'Go', 'REST APIs', 'GraphQL'],
+        frontend: ['React 19', 'Next.js', 'TypeScript', 'Tailwind CSS', 'State Management', 'Vite'],
+        backend: ['Node.js', 'Express', 'Python', 'FastAPI', 'REST APIs', 'GraphQL'],
         databases: ['PostgreSQL', 'MongoDB', 'Redis', 'Prisma ORM'],
-        cloudDevops: ['Docker', 'Kubernetes', 'AWS (S3, EC2, Lambda)', 'GitHub Actions', 'CI/CD'],
-        tools: ['Git', 'Postman', 'Figma', 'Jest / Vitest', 'Linux']
+        cloudDevops: ['Docker', 'Kubernetes', 'AWS (S3, Lambda)', 'CI/CD Pipelines', 'GitHub Actions'],
+        tools: ['Git', 'Postman', 'Figma', 'Jest / Vitest', 'Linux'],
       });
+
     case 'grammar-polish':
-      return prompt
-        ? prompt
-            .replace(/\bi am\b/gi, "I am")
-            .replace(/\bexperience in\b/gi, "expertise across")
-            .replace(/\bworked on\b/gi, "spearheaded the development of")
-            .replace(/\bmade\b/gi, "engineered")
-        : 'Engineered high-scale, production-ready software solutions with focus on performance, reliability, and maintainability.';
+      if (rawText) {
+        return rawText
+          .replace(/\bi am\b/gi, 'I am')
+          .replace(/\bexperience in\b/gi, 'expertise across')
+          .replace(/\bworked on\b/gi, 'spearheaded the development of')
+          .replace(/\bmade\b/gi, 'engineered')
+          .replace(/\bresponsible for\b/gi, 'led the execution of');
+      }
+      return 'Engineered high-scale, production-ready software solutions with focus on performance, reliability, and maintainability.';
+
     default:
-      return prompt || 'Successfully engineered scalable, performant software applications.';
+      return rawText || 'Successfully engineered scalable, performant software applications.';
   }
 }
 
 function analyzePortfolioFallback(portfolioData: any, targetRole: string) {
-  let score = 75;
+  let overallScore = 65;
+  let impactScore = 70;
+  let atsScore = 75;
+  let roleMatchScore = 75;
+
   const strengths: string[] = [];
   const missing: Array<{ sectionName: string; severity: 'high' | 'medium' | 'low'; reason: string }> = [];
 
-  if (portfolioData?.projects?.length >= 2) {
-    score += 10;
-    strengths.push('Great showcase of practical software projects with live demonstrations.');
+  const projectsCount = portfolioData?.projects?.length || 0;
+  const skillsCount = portfolioData?.skills?.length || 0;
+  const expCount = portfolioData?.experience?.length || 0;
+  const hasHeadline = Boolean(portfolioData?.profile?.headline || portfolioData?.profile?.tagline);
+  const hasGithub = Boolean(portfolioData?.codingProfiles?.github || portfolioData?.socialLinks?.github);
+
+  if (projectsCount >= 2) {
+    overallScore += 12;
+    impactScore += 15;
+    strengths.push(`Showcases ${projectsCount} practical software projects with live demos and repository links.`);
   } else {
-    missing.push({ sectionName: 'Projects', severity: 'high', reason: 'Recruiters prioritize candidates with 2 or more demonstrated portfolio projects.' });
+    missing.push({
+      sectionName: 'Projects',
+      severity: 'high',
+      reason: 'Recruiters prioritize candidates with 2 or more demonstrated portfolio projects.',
+    });
   }
 
-  if (portfolioData?.skills?.length >= 6) {
-    score += 8;
-    strengths.push('Comprehensive, well-rounded technical skill stack.');
+  if (skillsCount >= 5) {
+    overallScore += 10;
+    atsScore += 10;
+    roleMatchScore += 10;
+    strengths.push(`Diverse technical stack with ${skillsCount} categorized skills and proficiency indicators.`);
+  } else {
+    missing.push({
+      sectionName: 'Technical Skills',
+      severity: 'high',
+      reason: 'Add core frameworks, languages, and databases to pass automated recruiter ATS scans.',
+    });
   }
 
-  if (portfolioData?.profile?.headline) {
-    strengths.push('Clear personal brand headline and professional positioning.');
+  if (hasHeadline) {
+    overallScore += 8;
+    strengths.push('Clear personal brand headline and professional positioning statement.');
   }
 
-  if (!portfolioData?.codingProfiles?.github) {
-    missing.push({ sectionName: 'GitHub Profile', severity: 'medium', reason: 'Adding your GitHub profile allows recruiters to inspect your code quality.' });
+  if (expCount > 0) {
+    overallScore += 5;
+    impactScore += 8;
+    strengths.push('Detailed employment history with clear role responsibilities.');
+  }
+
+  if (!hasGithub) {
+    missing.push({
+      sectionName: 'GitHub Profile',
+      severity: 'medium',
+      reason: 'Linking your GitHub profile allows recruiters and hiring managers to inspect code quality.',
+    });
   }
 
   return {
-    overallScore: Math.min(95, score),
-    impactScore: 82,
-    atsScore: 85,
-    roleMatchScore: 88,
-    summaryAssessment: `Strong, well-structured portfolio for a ${targetRole || 'Software Professional'}. The profile clearly communicates core technical capabilities and is well positioned for recruiter discovery.`,
-    strengths: strengths.length ? strengths : ['Clear, professional profile layout and concise summary.'],
+    overallScore: Math.min(95, overallScore),
+    impactScore: Math.min(95, impactScore),
+    atsScore: Math.min(95, atsScore),
+    roleMatchScore: Math.min(95, roleMatchScore),
+    summaryAssessment: `Solid, recruiter-ready profile for a ${targetRole || 'Software Professional'}. The portfolio clearly showcases technical capabilities, practical software development projects, and role suitability.`,
+    strengths: strengths.length ? strengths : ['Clean, structured developer portfolio layout with foundational details.'],
     missingSections: missing,
     roleSpecificSuggestions: [
-      `Incorporate measurable performance metrics (e.g., latency reduction, user counts, % improvement) into project bullet points.`,
+      `Incorporate measurable performance metrics (e.g. latency reduction, user counts, % improvement) into project bullet points.`,
       `Highlight hands-on proficiency with modern ${targetRole || 'engineering'} ecosystems and containerized workflows.`,
-      `Ensure all projects have accessible live demos and clear README files on GitHub.`
+      `Ensure all showcased projects have accessible live links and clear README documentation on GitHub.`,
     ],
-    recommendedKeywords: ['TypeScript', 'Cloud Architecture', 'CI/CD', 'System Design', 'Performance Optimization', 'RESTful Microservices'],
+    recommendedKeywords: [
+      'TypeScript',
+      'Cloud Architecture',
+      'CI/CD Pipelines',
+      'System Design',
+      'Performance Optimization',
+      'RESTful APIs',
+    ],
     quickFixes: [
-      { field: 'Project Metrics', action: 'Quantify impact in project descriptions', impact: '+15% Recruiter Engagement' },
-      { field: 'GitHub Profile', action: 'Verify public repositories are pinned and documented', impact: '+20% Callback Rate' }
-    ]
+      { field: 'Project Metrics', action: 'Quantify impact with numbers and percentages', impact: '+15% Recruiter Engagement' },
+      { field: 'GitHub Profile', action: 'Verify public repositories are pinned and documented', impact: '+20% Callback Rate' },
+    ],
   };
 }
+
+// Health status endpoint
+app.get('/api/health', (_req: Request, res: Response) => {
+  res.json({
+    status: 'ok',
+    geminiConfigured: hasGeminiKey,
+    mode: hasGeminiKey ? 'ai-live' : 'smart-fallback',
+  });
+});
 
 // 1. AI Content Generation / Polish Endpoint
 app.post('/api/ai/generate-content', async (req: Request, res: Response) => {
   const { type, prompt, context, tone = 'professional', targetRole } = req.body;
-  
+
   try {
-    let systemInstruction = `You are a world-class tech recruiter, executive portfolio copywriter, and career coach.
+    if (!hasGeminiKey || !ai) {
+      throw new Error('Gemini API key not configured or offline mode active.');
+    }
+
+    const systemInstruction = `You are a world-class tech recruiter, executive portfolio copywriter, and career coach.
 Your job is to generate highly compelling, recruiter-ready, ATS-optimized, and impactful content for a developer or job-seeker's portfolio.
 Tone: ${tone}.
 Target Role: ${targetRole || 'Software Professional'}.
@@ -191,9 +290,9 @@ Text: ${prompt}`;
         userPrompt = prompt;
     }
 
-    const response = await callGeminiWithRetry(async () => {
+    const response = await callGeminiSafely(async () => {
       return await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
+        model: 'gemini-2.5-flash',
         contents: userPrompt,
         config: {
           systemInstruction,
@@ -205,13 +304,17 @@ Text: ${prompt}`;
     const result = response.text || '';
     res.json({ success: true, content: result });
   } catch (error: any) {
-    console.warn('Gemini content generation high load or error, using resilient fallback generator:', error?.message);
+    const isQuota = isQuotaExhaustedError(error);
+    const notice = isQuota
+      ? 'Generated via Smart Career Engine (AI API quota limit reached; uninterrupted fallback active).'
+      : 'Generated via Smart Career Engine.';
+
     const fallback = generateContentFallback(type, prompt, context, targetRole);
     res.json({
       success: true,
       content: fallback,
       isFallback: true,
-      notice: 'Generated with high-performance backup career engine due to AI traffic peak.',
+      notice,
     });
   }
 });
@@ -220,24 +323,28 @@ Text: ${prompt}`;
 app.post('/api/ai/analyze-portfolio', async (req: Request, res: Response) => {
   const { portfolioData, targetRole = 'Full Stack Developer' } = req.body;
   try {
+    if (!hasGeminiKey || !ai) {
+      throw new Error('Gemini API key not configured or offline mode active.');
+    }
+
     const systemInstruction = `You are a Senior Technical Hiring Manager and Career Strategist evaluating a candidate's portfolio.
 You analyze the portfolio data thoroughly for:
 1. Overall Completeness & Impact Score (0 to 100)
 2. ATS & Recruiter Friendliness Score (0 to 100)
 3. Target Role Match for "${targetRole}"
 4. Strengths (top 3-4 distinct highlights)
-5. Critical Missing Sections or weak points (e.g. missing live demo links, lack of quantifiable metrics, vague project descriptions, missing social links)
-6. Actionable step-by-step suggestions to boost recruiter callback rate
+5. Critical Missing Sections or weak points
+6. Actionable step-by-step suggestions
 7. Suggested keywords & tech stack additions for "${targetRole}".
 
-You MUST return a strictly valid JSON object matching the exact schema specified.`;
+You MUST return a strictly valid JSON object matching the schema.`;
 
     const userPrompt = `Analyze this portfolio data for the target role: "${targetRole}":
 ${JSON.stringify(portfolioData, null, 2)}`;
 
-    const response = await callGeminiWithRetry(async () => {
+    const response = await callGeminiSafely(async () => {
       return await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
+        model: 'gemini-2.5-flash',
         contents: userPrompt,
         config: {
           systemInstruction,
@@ -245,15 +352,14 @@ ${JSON.stringify(portfolioData, null, 2)}`;
           responseSchema: {
             type: Type.OBJECT,
             properties: {
-              overallScore: { type: Type.INTEGER, description: 'Score from 0 to 100' },
-              impactScore: { type: Type.INTEGER, description: 'Score from 0 to 100' },
-              atsScore: { type: Type.INTEGER, description: 'Score from 0 to 100' },
-              roleMatchScore: { type: Type.INTEGER, description: 'Score from 0 to 100' },
-              summaryAssessment: { type: Type.STRING, description: '2-3 sentence executive recruiter summary' },
+              overallScore: { type: Type.INTEGER },
+              impactScore: { type: Type.INTEGER },
+              atsScore: { type: Type.INTEGER },
+              roleMatchScore: { type: Type.INTEGER },
+              summaryAssessment: { type: Type.STRING },
               strengths: {
                 type: Type.ARRAY,
                 items: { type: Type.STRING },
-                description: '3-5 key positive elements found'
               },
               missingSections: {
                 type: Type.ARRAY,
@@ -261,20 +367,19 @@ ${JSON.stringify(portfolioData, null, 2)}`;
                   type: Type.OBJECT,
                   properties: {
                     sectionName: { type: Type.STRING },
-                    severity: { type: Type.STRING, description: 'high, medium, or low' },
+                    severity: { type: Type.STRING },
                     reason: { type: Type.STRING },
                   },
-                  required: ['sectionName', 'severity', 'reason']
-                }
+                  required: ['sectionName', 'severity', 'reason'],
+                },
               },
               roleSpecificSuggestions: {
                 type: Type.ARRAY,
                 items: { type: Type.STRING },
-                description: 'Specific recommendations for the target role'
               },
               recommendedKeywords: {
                 type: Type.ARRAY,
-                items: { type: Type.STRING }
+                items: { type: Type.STRING },
               },
               quickFixes: {
                 type: Type.ARRAY,
@@ -283,11 +388,11 @@ ${JSON.stringify(portfolioData, null, 2)}`;
                   properties: {
                     field: { type: Type.STRING },
                     action: { type: Type.STRING },
-                    impact: { type: Type.STRING }
+                    impact: { type: Type.STRING },
                   },
-                  required: ['field', 'action', 'impact']
-                }
-              }
+                  required: ['field', 'action', 'impact'],
+                },
+              },
             },
             required: [
               'overallScore',
@@ -299,47 +404,127 @@ ${JSON.stringify(portfolioData, null, 2)}`;
               'missingSections',
               'roleSpecificSuggestions',
               'recommendedKeywords',
-              'quickFixes'
-            ]
-          }
-        }
+              'quickFixes',
+            ],
+          },
+        },
       });
     });
 
     const parsed = JSON.parse(response.text || '{}');
     res.json({ success: true, analysis: parsed });
   } catch (error: any) {
-    console.warn('Portfolio analysis high traffic or error, using structured fallback:', error?.message);
+    const isQuota = isQuotaExhaustedError(error);
     const fallbackAnalysis = analyzePortfolioFallback(portfolioData, targetRole);
     res.json({
       success: true,
       analysis: fallbackAnalysis,
       isFallback: true,
+      notice: isQuota ? 'Audit completed using Smart Heuristic Career Engine (AI quota offline mode).' : undefined,
     });
   }
 });
+
+// Helper for parsing raw text resume locally when API is unavailable
+function parseResumeLocally(text: string) {
+  const clean = text || '';
+  const emailMatch = clean.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+  const phoneMatch = clean.match(/(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/);
+  const lines = clean.split('\n').map((l) => l.trim()).filter(Boolean);
+  const fullName = lines[0] && lines[0].length < 35 ? lines[0] : 'Candidate';
+
+  // Extract potential skills
+  const knownSkills = [
+    'React', 'TypeScript', 'JavaScript', 'Node.js', 'Python', 'Java', 'C++', 'Go',
+    'HTML', 'CSS', 'Tailwind', 'PostgreSQL', 'MongoDB', 'Redis', 'SQL', 'Docker',
+    'Kubernetes', 'AWS', 'GCP', 'Azure', 'Git', 'GraphQL', 'REST', 'Linux', 'Figma'
+  ];
+  const detectedSkills = knownSkills.filter((s) => new RegExp(`\\b${s}\\b`, 'i').test(clean));
+
+  const skillItems = (detectedSkills.length > 0 ? detectedSkills : ['TypeScript', 'React', 'Node.js', 'PostgreSQL']).map((name) => ({
+    name,
+    category: ['React', 'HTML', 'CSS', 'Tailwind'].includes(name)
+      ? 'Frontend'
+      : ['Node.js', 'Python', 'Java', 'Go'].includes(name)
+      ? 'Backend'
+      : ['PostgreSQL', 'MongoDB', 'Redis', 'SQL'].includes(name)
+      ? 'Database'
+      : 'Tools',
+    proficiency: 85,
+  }));
+
+  return {
+    profile: {
+      fullName,
+      title: 'Full Stack Software Engineer',
+      headline: 'Dedicated software engineer focused on building clean, performant, and resilient applications.',
+      email: emailMatch ? emailMatch[0] : 'developer@example.com',
+      phone: phoneMatch ? phoneMatch[0] : '',
+      location: 'Remote / Hybrid',
+      about: clean.slice(0, 300) || 'Experienced software professional passionate about building reliable software.',
+    },
+    skills: skillItems,
+    experiences: [
+      {
+        role: 'Software Engineer',
+        company: 'Technology Solutions',
+        location: 'Remote',
+        startDate: '2023',
+        endDate: 'Present',
+        current: true,
+        type: 'Full-time',
+        description: 'Developed and maintained customer-facing web platforms and APIs.',
+        achievements: ['Delivered core platform features on schedule with high test coverage.'],
+        technologies: ['TypeScript', 'React', 'Node.js', 'PostgreSQL'],
+      },
+    ],
+    projects: [
+      {
+        title: 'Full-Stack Web Application',
+        subtitle: 'Production Web Platform',
+        description: 'Modern full-stack web application designed for high-throughput data processing.',
+        technologies: ['React', 'TypeScript', 'Tailwind CSS', 'Node.js'],
+        githubUrl: 'https://github.com',
+        liveUrl: 'https://example.com',
+      },
+    ],
+    education: [
+      {
+        degree: 'B.S. in Computer Science',
+        institution: 'University',
+        startDate: '2020',
+        endDate: '2024',
+        grade: '3.8 GPA',
+      },
+    ],
+  };
+}
 
 // 3. Resume Parse & Structured Portfolio Extraction Endpoint
 app.post('/api/ai/parse-resume', async (req: Request, res: Response) => {
   const { resumeText, fileData, mimeType } = req.body;
   try {
-    let parts: any[] = [];
+    if (!hasGeminiKey || !ai) {
+      throw new Error('Gemini API offline mode active.');
+    }
+
+    const parts: any[] = [];
 
     if (fileData && mimeType) {
       parts.push({
         inlineData: {
           mimeType,
           data: fileData,
-        }
+        },
       });
       parts.push({
-        text: `Extract all candidate data from this resume document into a comprehensive, structured portfolio JSON representation. Clean up formatting, quantify achievements where appropriate, categorize skills, extract projects, experiences, internships, education, certifications, and links.`
+        text: `Extract all candidate data from this resume document into a comprehensive, structured portfolio JSON representation. Clean up formatting, quantify achievements where appropriate, categorize skills, extract projects, experiences, internships, education, certifications, and links.`,
       });
     } else if (resumeText) {
       parts.push({
         text: `Extract all candidate information from the following raw resume text and convert it into a structured portfolio JSON representation.
 Resume Text:
-${resumeText}`
+${resumeText}`,
       });
     } else {
       return res.status(400).json({ success: false, error: 'Resume text or file data required' });
@@ -347,12 +532,11 @@ ${resumeText}`
 
     const systemInstruction = `You are an expert resume parser and career data transformer.
 Extract the candidate's information into a structured portfolio object.
-Return clean, polished, well-formatted details.
-If certain fields are missing, provide reasonable smart defaults based on the text.`;
+Return clean, polished, well-formatted details.`;
 
-    const response = await callGeminiWithRetry(async () => {
+    const response = await callGeminiSafely(async () => {
       return await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
+        model: 'gemini-2.5-flash',
         contents: parts.length === 1 ? parts[0].text : { parts },
         config: {
           systemInstruction,
@@ -374,7 +558,7 @@ If certain fields are missing, provide reasonable smart defaults based on the te
                   linkedin: { type: Type.STRING },
                   website: { type: Type.STRING },
                 },
-                required: ['fullName', 'title', 'email', 'about']
+                required: ['fullName', 'title', 'email', 'about'],
               },
               skills: {
                 type: Type.ARRAY,
@@ -382,11 +566,11 @@ If certain fields are missing, provide reasonable smart defaults based on the te
                   type: Type.OBJECT,
                   properties: {
                     name: { type: Type.STRING },
-                    category: { type: Type.STRING, description: 'Frontend, Backend, Database, Cloud/DevOps, Languages, Tools, etc.' },
-                    proficiency: { type: Type.INTEGER, description: 'Proficiency percentage 1-100' }
+                    category: { type: Type.STRING },
+                    proficiency: { type: Type.INTEGER },
                   },
-                  required: ['name', 'category']
-                }
+                  required: ['name', 'category'],
+                },
               },
               experiences: {
                 type: Type.ARRAY,
@@ -399,13 +583,13 @@ If certain fields are missing, provide reasonable smart defaults based on the te
                     startDate: { type: Type.STRING },
                     endDate: { type: Type.STRING },
                     current: { type: Type.BOOLEAN },
-                    type: { type: Type.STRING, description: 'Full-time, Part-time, Internship, Freelance' },
+                    type: { type: Type.STRING },
                     description: { type: Type.STRING },
                     achievements: { type: Type.ARRAY, items: { type: Type.STRING } },
-                    technologies: { type: Type.ARRAY, items: { type: Type.STRING } }
+                    technologies: { type: Type.ARRAY, items: { type: Type.STRING } },
                   },
-                  required: ['role', 'company', 'startDate', 'description']
-                }
+                  required: ['role', 'company', 'startDate', 'description'],
+                },
               },
               projects: {
                 type: Type.ARRAY,
@@ -417,10 +601,10 @@ If certain fields are missing, provide reasonable smart defaults based on the te
                     technologies: { type: Type.ARRAY, items: { type: Type.STRING } },
                     githubUrl: { type: Type.STRING },
                     liveUrl: { type: Type.STRING },
-                    highlights: { type: Type.ARRAY, items: { type: Type.STRING } }
+                    highlights: { type: Type.ARRAY, items: { type: Type.STRING } },
                   },
-                  required: ['title', 'description', 'technologies']
-                }
+                  required: ['title', 'description', 'technologies'],
+                },
               },
               education: {
                 type: Type.ARRAY,
@@ -433,10 +617,10 @@ If certain fields are missing, provide reasonable smart defaults based on the te
                     startDate: { type: Type.STRING },
                     endDate: { type: Type.STRING },
                     grade: { type: Type.STRING },
-                    location: { type: Type.STRING }
+                    location: { type: Type.STRING },
                   },
-                  required: ['degree', 'institution']
-                }
+                  required: ['degree', 'institution'],
+                },
               },
               certifications: {
                 type: Type.ARRAY,
@@ -446,85 +630,27 @@ If certain fields are missing, provide reasonable smart defaults based on the te
                     name: { type: Type.STRING },
                     issuer: { type: Type.STRING },
                     issueDate: { type: Type.STRING },
-                    url: { type: Type.STRING }
+                    url: { type: Type.STRING },
                   },
-                  required: ['name', 'issuer']
-                }
+                  required: ['name', 'issuer'],
+                },
               },
-              achievements: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    title: { type: Type.STRING },
-                    description: { type: Type.STRING },
-                    date: { type: Type.STRING }
-                  },
-                  required: ['title']
-                }
-              }
             },
-            required: ['profile', 'skills', 'experiences', 'projects', 'education']
-          }
-        }
+            required: ['profile', 'skills', 'experiences', 'projects', 'education'],
+          },
+        },
       });
     });
 
     const parsed = JSON.parse(response.text || '{}');
     res.json({ success: true, extractedData: parsed });
   } catch (error: any) {
-    console.warn('Resume parsing fallback due to service load:', error?.message);
-    // Parse what we can from plain text
-    const text = resumeText || '';
-    const emailMatch = text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
-    const lines = text.split('\n').map((l: string) => l.trim()).filter(Boolean);
-    const nameCandidate = lines[0] || 'Candidate Name';
-
+    const localData = parseResumeLocally(resumeText || '');
     res.json({
       success: true,
-      extractedData: {
-        profile: {
-          fullName: nameCandidate.length < 35 ? nameCandidate : 'Candidate Name',
-          title: 'Software Developer',
-          headline: 'Dedicated software professional with hands-on development experience.',
-          email: emailMatch ? emailMatch[0] : 'contact@example.com',
-          about: text.slice(0, 300) || 'Experienced software professional passionate about building reliable software.',
-        },
-        skills: [
-          { name: 'JavaScript / TypeScript', category: 'Languages', proficiency: 90 },
-          { name: 'React', category: 'Frontend', proficiency: 85 },
-          { name: 'Node.js', category: 'Backend', proficiency: 80 },
-          { name: 'PostgreSQL', category: 'Database', proficiency: 75 }
-        ],
-        experiences: [
-          {
-            role: 'Software Developer',
-            company: 'Tech Enterprise',
-            startDate: '2023',
-            endDate: 'Present',
-            current: true,
-            description: 'Developed and maintained customer-facing software features.',
-            achievements: ['Delivered features on schedule with high reliability.'],
-            technologies: ['TypeScript', 'React', 'Node.js']
-          }
-        ],
-        projects: [
-          {
-            title: 'Full Stack Web Platform',
-            description: 'Scalable web application built with modern architecture.',
-            technologies: ['React', 'TypeScript', 'Node.js']
-          }
-        ],
-        education: [
-          {
-            degree: 'B.S. in Computer Science',
-            institution: 'University',
-            startDate: '2020',
-            endDate: '2024'
-          }
-        ]
-      },
+      extractedData: localData,
       isFallback: true,
+      notice: 'Parsed using smart local text extractor (AI quota offline mode).',
     });
   }
 });
@@ -533,15 +659,15 @@ If certain fields are missing, provide reasonable smart defaults based on the te
 app.post('/api/ai/chat-assistant', async (req: Request, res: Response) => {
   const { messages, portfolioContext, targetRole } = req.body;
   try {
-    const systemInstruction = `You are FolioBot, an elite, hyper-supportive AI Career & Portfolio Mentor.
-You help students, freshers, experienced developers, and career switchers craft world-class tech portfolios that land interviews at top tech companies and innovative startups.
-You know modern web design, ATS standards, GitHub showcase strategies, storytelling techniques for projects, and recruiter psychological triggers.
+    if (!hasGeminiKey || !ai) {
+      throw new Error('Gemini API offline mode active.');
+    }
 
+    const systemInstruction = `You are FolioBot, an elite, hyper-supportive AI Career & Portfolio Mentor.
+You help candidates craft world-class tech portfolios that land interviews.
 Portfolio Context: ${JSON.stringify(portfolioContext || {})}
 Target Role: ${targetRole || 'Software Professional'}
-
-Give concise, encouraging, highly practical, formatted responses (with bullet points, sample copy, or actionable suggestions).
-When asked to write or improve specific sections, give ready-to-paste text.`;
+Give concise, encouraging, highly practical responses.`;
 
     const contents = (messages || []).map((m: any) => ({
       role: m.role === 'assistant' ? 'model' : 'user',
@@ -552,9 +678,9 @@ When asked to write or improve specific sections, give ready-to-paste text.`;
       contents.push({ role: 'user', parts: [{ text: 'Hello! How can I make my portfolio stand out?' }] });
     }
 
-    const response = await callGeminiWithRetry(async () => {
+    const response = await callGeminiSafely(async () => {
       return await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
+        model: 'gemini-2.5-flash',
         contents,
         config: {
           systemInstruction,
@@ -565,29 +691,34 @@ When asked to write or improve specific sections, give ready-to-paste text.`;
 
     res.json({ success: true, message: response.text || '' });
   } catch (error: any) {
-    console.warn('AI chat assistant fallback due to error:', error?.message);
     const lastUserMsg = (messages || []).filter((m: any) => m.role === 'user').slice(-1)[0]?.content || '';
-    
-    let fallbackReply = `Here are some high-impact recommendations to elevate your **${targetRole || 'Developer'}** portfolio:
+    const q = lastUserMsg.toLowerCase();
 
-• **Use the STAR Formula:** Format project bullet points as: *Accomplished [X], measured by [Y], by doing [Z]*.
-• **Add Live Links:** Recruiters look for live deployment links, clean GitHub repositories, and demo previews.
-• **Highlight Core Skills:** Group your skills cleanly into Frontend, Backend, Databases, and DevOps.
+    let fallbackReply = `Here are actionable ways to make your **${targetRole || 'Developer'}** portfolio stand out:
 
-Feel free to customize any section in the Builder!`;
+• **Use the STAR Formula:** Format project achievements as *Situation, Task, Action, and Result* with quantifiable numbers (e.g. *Reduced latency by 40%*).
+• **Live URLs & Repos:** Recruiters prioritize projects with working live demos and public GitHub repositories with clean README files.
+• **Categorized Skills:** Organize your stack into Frontend, Backend, Databases, and Cloud/DevOps with proficiency indicators.
+• **Clear Tagline:** State who you are, what you build, and your availability status right in the hero section!`;
 
-    if (lastUserMsg.toLowerCase().includes('project')) {
-      fallbackReply = `To make your project descriptions stand out:
-1. **The Hook:** State the real-world problem your application solves in 1-2 sentences.
-2. **Architecture:** List the tech stack (e.g. React 19, TypeScript, PostgreSQL, Redis).
-3. **Quantified Impact:** Mention metrics like "Reduced load times by 40%" or "Handled 10k+ requests/day".
-4. **Links:** Always include both GitHub repo and Live Demo URLs!`;
+    if (q.includes('project') || q.includes('star')) {
+      fallbackReply = `To craft an impressive project description using the **STAR Method**:
+1. **Situation & Task:** Briefly explain the core problem (e.g., *Built an automated real-time metrics platform for distributed systems*).
+2. **Action:** Specify the technologies and engineering decisions (e.g., *Engineered REST endpoints in Node.js/TypeScript and optimized PostgreSQL indexing*).
+3. **Result:** Provide measurable metrics (e.g., *Processed 10k+ requests/sec with 99.9% uptime*).
+4. Always provide both a **GitHub repository** link and a **Live Demo** URL!`;
+    } else if (q.includes('headline') || q.includes('tagline') || q.includes('title')) {
+      fallbackReply = `Top recruiter-tested headlines for **${targetRole || 'Software Engineer'}**:
+• *Senior ${targetRole || 'Software Engineer'} | Scalable Cloud Systems & Modern Web Applications*
+• *Full-Lifecycle ${targetRole || 'Engineer'} | Building High-Velocity, Resilient Digital Solutions*
+• *Passionate ${targetRole || 'Developer'} specializing in Distributed Architecture & Clean Code*`;
     }
 
     res.json({
       success: true,
       message: fallbackReply,
       isFallback: true,
+      notice: 'Response generated via FolioBot smart career knowledge base.',
     });
   }
 });
@@ -602,7 +733,7 @@ function sanitizeGitHubUsername(input: string): string {
   return parts[0] ? parts[0].trim() : '';
 }
 
-// 5. GitHub Public Repos & Profile Sync
+// 5. GitHub Public Repos & Profile Sync (Does not require Gemini)
 app.post('/api/github/sync', async (req: Request, res: Response) => {
   try {
     const { username } = req.body;
@@ -614,7 +745,7 @@ app.post('/api/github/sync', async (req: Request, res: Response) => {
     if (!cleanUsername) {
       return res.status(400).json({ success: false, error: 'Invalid GitHub username or URL' });
     }
-    
+
     // Fetch GitHub User Info
     const userRes = await fetch(`https://api.github.com/users/${encodeURIComponent(cleanUsername)}`, {
       headers: { 'User-Agent': 'FolioCraft-App' },
@@ -622,10 +753,16 @@ app.post('/api/github/sync', async (req: Request, res: Response) => {
 
     if (!userRes.ok) {
       if (userRes.status === 404) {
-        return res.status(404).json({ success: false, error: `GitHub user '${cleanUsername}' not found. Please check spelling or profile privacy.` });
+        return res.status(404).json({
+          success: false,
+          error: `GitHub user '${cleanUsername}' not found. Please check spelling or profile privacy.`,
+        });
       }
       if (userRes.status === 403) {
-        return res.status(403).json({ success: false, error: 'GitHub API rate limit reached. Please wait a moment or try another username.' });
+        return res.status(403).json({
+          success: false,
+          error: 'GitHub API rate limit reached. Please wait a moment or try another username.',
+        });
       }
       return res.status(userRes.status).json({ success: false, error: `GitHub API returned status ${userRes.status}` });
     }
@@ -649,14 +786,23 @@ app.post('/api/github/sync', async (req: Request, res: Response) => {
             id: `gh-${r.id}`,
             title: r.name.replace(/[-_]/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()),
             subtitle: r.language ? `${r.language} Application` : 'Open Source Project',
-            description: r.description || `Modern ${r.language || 'software'} project developed by ${userData.name || cleanUsername}.`,
+            description:
+              r.description || `Modern ${r.language || 'software'} project developed by ${userData.name || cleanUsername}.`,
             githubUrl: r.html_url,
             liveUrl: r.homepage || '',
             technologies: [r.language, ...(r.topics || [])].filter(Boolean),
             stars: r.stargazers_count || 0,
             forks: r.forks_count || 0,
-            category: r.language ? (['JavaScript', 'TypeScript', 'HTML', 'CSS', 'Vue', 'React'].includes(r.language) ? 'Web' : ['Python', 'R', 'Jupyter Notebook'].includes(r.language) ? 'AI/ML' : ['Dart', 'Kotlin', 'Swift'].includes(r.language) ? 'Mobile' : 'Software') : 'Web',
-            featured: (r.stargazers_count > 0) || !r.private,
+            category: r.language
+              ? ['JavaScript', 'TypeScript', 'HTML', 'CSS', 'Vue', 'React'].includes(r.language)
+                ? 'Web'
+                : ['Python', 'R', 'Jupyter Notebook'].includes(r.language)
+                ? 'AI/ML'
+                : ['Dart', 'Kotlin', 'Swift'].includes(r.language)
+                ? 'Mobile'
+                : 'Software'
+              : 'Web',
+            featured: r.stargazers_count > 0 || !r.private,
           }))
       : [];
 
